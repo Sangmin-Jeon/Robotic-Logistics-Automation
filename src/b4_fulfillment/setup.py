@@ -21,7 +21,8 @@ setup(
     entry_points={
         'console_scripts': [
             'gui = b4_fulfillment.gui:main',
-            'webcam = b4_fulfillment.webcam:main'
+            'webcam = b4_fulfillment.webcam:main',
+            'robot = b4_fulfillment.robot:main'
         ],
     },
 )
