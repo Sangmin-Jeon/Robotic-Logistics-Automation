@@ -22,7 +22,9 @@ setup(
         'console_scripts': [
             'gui = b4_fulfillment.gui:main',
             'webcam = b4_fulfillment.webcam:main',
-            'robot = b4_fulfillment.robot:main'
+            'robot = b4_fulfillment.robot:main',
+            'conveyor = b4_fulfillment.conveyor:main',
+            'debug = b4_fulfillment.debug:main'
         ],
     },
 )
