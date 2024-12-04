@@ -26,6 +26,10 @@ set(srv_files
   "srv/Coordinate.srv"
 )
 
+set(action_files
+    "action/Conveyor.action"
+)
+
 rosidl_generate_interfaces(${PROJECT_NAME}
   ${msg_files}
   ${srv_files}
