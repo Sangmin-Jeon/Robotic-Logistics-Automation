@@ -8,10 +8,12 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPixmap, QPalette, QColor, QImage
 from PyQt5.QtWidgets import QLabel
 from b4_fulfillment_interfaces.msg import Button, RobotStatus  # Import the custom message type
+from b4_fulfillment_interfaces.srv import Coordinate
 from std_msgs.msg import String
 import numpy as np
 import base64
 from sensor_msgs.msg import Image
+import json
 
 
 class LoginUI(QWidget):
@@ -257,6 +259,7 @@ class GUINode(Node):
         self.subscription = self.create_subscription(RobotStatus, 'robot_status_topic', self.robot_status_callback, 10)
         self.image_subscription = self.create_subscription(Image, 'world_video', self.image_callback,
                                                            10)  # 이미지 수신 토픽 구독
+        self.srv = self.create_service(Coordinate, 'coordinate_service', self.callback)
         self.subscription  # prevent unused variable warning
 
     def image_callback(self, msg):
@@ -278,6 +281,21 @@ class GUINode(Node):
 
     def spin_once(self):
         rclpy.spin_once(self, timeout_sec=0.1)
+
+    def callback(self, request, response):
+        try:
+            # JSON 문자열을 파싱
+            json_data = json.loads(request.json_data)
+            self.get_logger().info(f"Received JSON: {json_data}")
+
+            # 처리 후 응답
+            # response.success = True
+            # response.message = "JSON processed successfully"
+        except json.JSONDecodeError as e:
+            self.get_logger().error(f"Invalid JSON: {e}")
+            # response.success = False
+            # response.message = "Invalid JSON format"
+        return response
 
 
 def main(args=None):
