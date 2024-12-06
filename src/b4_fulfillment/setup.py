@@ -24,6 +24,7 @@ setup(
             'webcam = b4_fulfillment.webcam:main',
             'robot = b4_fulfillment.robot:main',
             'conveyor = b4_fulfillment.conveyor:main',
+            'manipulation = b4_fulfillment.manipulation:main',
             'debug = b4_fulfillment.debug:main'
         ],
     },
