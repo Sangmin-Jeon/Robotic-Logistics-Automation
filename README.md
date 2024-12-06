@@ -23,7 +23,7 @@ ros2 run b4_fulfillment manipulation
 
 ### robot_eyes 
 ~~~bash
-ros2 run b4_fulfillment robot_eyes 
+ros2 run b4_fulfillment robot_eyes ~/B4_Fulfillment_ws/src/b4_fulfillment/best.pt
 ~~~
 
 ---
