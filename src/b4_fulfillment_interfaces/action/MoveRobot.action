@@ -1,0 +1,8 @@
+# Goal
+geometry_msgs/Point coord
+---
+# Result
+bool success
+---
+# Feedback
+float32 progress

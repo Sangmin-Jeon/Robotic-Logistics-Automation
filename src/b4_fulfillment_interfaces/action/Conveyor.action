@@ -1,0 +1,8 @@
+# Goal
+int32 goal
+---
+# Result
+bool cfinished
+---
+# Feedback
+string cfeedback
