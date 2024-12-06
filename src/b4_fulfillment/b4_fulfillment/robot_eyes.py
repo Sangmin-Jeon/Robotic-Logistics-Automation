@@ -26,13 +26,13 @@ class RobotEyes(Node):
         self.model = YOLO(self.pt_file)
         self.get_logger().info(f'Loaded model from {self.pt_file}')
 
-        # 웹캠 설정, 인덱스 0인 기본 웹캠 장치를 사용하여 영상을 읽음
         self.cap = cv2.VideoCapture('/dev/video0')
         if not self.cap.isOpened():
             self.get_logger().error('Could not open video device')  # 카메라가 열리지 않을 경우 오류 메시지
 
-        # ROS2 퍼블리셔 설정: 탐지된 이미지와 경고 메시지를 발행
         self.video_publisher = self.create_publisher(Image, 'gripper_images', 10)  # 비디오 피드 퍼블리셔 추가
+        self.center_pub = self.create_publisher(Point, 'center_point', 10) # 중심점 퍼블리셔
+
         self.bridge = CvBridge()  # OpenCV 이미지를 ROS 이미지로 변환하기 위한 브릿지 설정
 
         self.frame_sent = False  # 프레임 전송 여부 확인
@@ -85,7 +85,12 @@ class RobotEyes(Node):
 
                 # 이전 위치 저장 및 경계선 넘는지 확인
                 object_id = f"obj_{i}"
-                current_center = (center_x, center_y)
+                # current_center = (center_x, center_y)
+                cur_point = Point()
+                cur_point.x = float(center_x)
+                cur_point.y = float(center_y)
+                cur_point.z = 0.0
+                self.center_pub.publish(cur_point)
 
                 # 현재 위치 저장
                 csv_output.append([x1, y1, x2, y2, confidence, cls])

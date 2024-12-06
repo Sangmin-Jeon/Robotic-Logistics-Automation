@@ -25,6 +25,7 @@ import time
 import cv2
 from threading import Event
 from cv_bridge import CvBridge
+from geometry_msgs.msg import Point  # 좌표 메시지 타입 추가
 
 r1 = 130
 r2 = 124
@@ -104,12 +105,22 @@ class ManipulationNode(Node):
         )
 
         # 이미지 토픽 서브스크라이버 생성
-        self.subscription = self.create_subscription(
+        _ = self.create_subscription(
             Image,  # 메시지 타입
             'gripper_images',  # 토픽 이름 (퍼블리셔와 일치)
             self.image_callback,  # 콜백 함수
             10  # QoS 프로파일
         )
+
+        # 이미지 토픽 서브스크라이버 생성
+        _ = self.create_subscription(
+            Point,  # 메시지 타입
+            'center_point',  # 토픽 이름 (퍼블리셔와 일치)
+            self.box_data_callback,  # 콜백 함수
+            10  # QoS 프로파일
+        )
+
+        self.start_job1()
 
     def image_callback(self, msg):
         # 메시지를 OpenCV 이미지로 변환
@@ -122,6 +133,47 @@ class ManipulationNode(Node):
             self.get_logger().error(f"Failed to process image: {e}")
 
 
+    def box_data_callback(self, msg):
+        # geometry_msgs.msg.Point(x=244.0, y=385.0, z=0.0)
+
+        camera_x = 320  # 카메라 중앙 x
+        camera_y = 240  # 카메라 중앙 y
+
+        # 중심점 계산
+        dx, dy, dz = self.calculate_camera_movement(camera_x, camera_y, msg)
+        # TODO: 계산 된 값 매니풀레이터에 맞게 조정 필요
+
+        self.set_center_pose(dx, dy, dz)
+
+    def start_job1(self):
+        box = Coordinate(x=150, y=45, z=130)
+        self.send_joint_pose_goal(box.x, box.y, box.z, r1, r2, r3)
+
+    def start_job2(self):
+        pass
+
+    def start_job3(self):
+        pass
+
+    def calculate_camera_movement(self, camera_x, camera_y, msg):
+        # msg로 받은 중심점 좌표
+        center_x = msg.x
+        center_y = msg.y
+        center_z = msg.z  # z 값도 필요한 경우
+
+        # 카메라의 중심 (camera_x, camera_y)와 주어진 중심점 (center_x, center_y) 간의 차이 계산
+        dx = center_x - camera_x  # x축 이동량
+        dy = center_y - camera_y  # y축 이동량
+
+        # z 값은 필요에 따라 추가적으로 설정할 수 있습니다
+        dz = center_z  # 카메라의 깊이 정보가 필요하다면, 적절한 값으로 설정
+
+        return dx, dy, dz
+
+    def set_center_pose(self, x, y, z):
+        print(f"x: {x}, y: {y}, z: {z} 만큼 움직여 중앙 정렬 중...")
+        self.send_joint_pose_goal(x, y, z, r1, r2, r3)
+        time.sleep(2)
 
     def handle_data_collect_service_request(self, request, response):
         """
@@ -209,6 +261,7 @@ class ManipulationNode(Node):
 
 
     def send_joint_pose_goal(self, x, y, z, r1, r2, r3):
+        print(f"x: {x}, y: {y}, z: {z} 로 이동")
         J0, J1, J2, J3, Sxy, sr1, sr2, sr3, St, Rt = self.solv_robot_arm2(x, y, z, r1, r2, r3)
 
         current_time = self.get_clock().now()
