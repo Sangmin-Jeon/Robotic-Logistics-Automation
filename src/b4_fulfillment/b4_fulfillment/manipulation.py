@@ -16,10 +16,15 @@ from std_msgs.msg import Header
 from rclpy.node import Node
 from collections import namedtuple
 from b4_fulfillment_interfaces.srv import DataCollect
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
+from sensor_msgs.msg import Image
 
 import math
 import time
 import cv2
+from threading import Event
+from cv_bridge import CvBridge
 
 r1 = 130
 r2 = 124
@@ -83,12 +88,40 @@ class ManipulationNode(Node):
         # # 집게 닫기
         # close = self.send_gripper_goal('close')
 
+        self.callback_group = ReentrantCallbackGroup()
+
+        self.bridge = CvBridge()
+        # 실시간 이미지
+        self.cv_image = None
+        self.image_event = Event()
+
         # 자동 데이터 수집 서비스 서버 생성
         _ = self.create_service(
             DataCollect,
             'data_collect_service',
-            self.handle_data_collect_service_request
+            self.handle_data_collect_service_request,
+            callback_group=self.callback_group
         )
+
+        # 이미지 토픽 서브스크라이버 생성
+        self.subscription = self.create_subscription(
+            Image,  # 메시지 타입
+            'gripper_images',  # 토픽 이름 (퍼블리셔와 일치)
+            self.image_callback,  # 콜백 함수
+            10  # QoS 프로파일
+        )
+
+    def image_callback(self, msg):
+        # 메시지를 OpenCV 이미지로 변환
+        try:
+            self.cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            self.image_event.set()  # 이미지 수신 이벤트 발생
+            self.get_logger().info('Image received')
+
+        except Exception as e:
+            self.get_logger().error(f"Failed to process image: {e}")
+
+
 
     def handle_data_collect_service_request(self, request, response):
         """
@@ -121,7 +154,7 @@ class ManipulationNode(Node):
 
         index = 1
 
-        cap = cv2.VideoCapture('/dev/video0')
+        # cap = cv2.VideoCapture('/dev/video0')
         # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # 가로 해상도 설정
         # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)  # 세로 해상도 설정
 
@@ -132,30 +165,32 @@ class ManipulationNode(Node):
                 self.send_joint_pose_goal(box.x, box.y, box.z, r1, r2, r3)
                 time.sleep(6)
 
-                self.get_image_data(cap=cap, index=index)
+                self.get_image_data(index=index)
                 time.sleep(3)
                 index += 1
 
-        cap.release()
         return True
-        # cv2.destroyAllWindows()
 
-    def get_image_data(self, cap, index):
+    def get_image_data(self, index):
+        # 이미지 저장을 위한 디렉토리 생성
         save_directory = "img_capture"
         os.makedirs(save_directory, exist_ok=True)
 
-        # 처음 5개 프레임은 무시
-        for _ in range(5):
-            ret, frame = cap.read()
+        # 이미지 대기
+        if not self.image_event.wait(timeout=5):  # 최대 5초 대기
+            self.get_logger().error("Timeout waiting for image")
+            return
 
-        # 유효한 이미지 캡처
-        ret, frame = cap.read()
-        if ret:  # 이미지 캡처가 성공적으로 되었는지 확인
-            file_name = f'{save_directory}/box_{index}.jpg'
-            cv2.imwrite(file_name, frame)
-            print(f"Image saved. name:{file_name}")
+        # 이미지 저장
+        if self.cv_image is not None:
+            file_name = f"{save_directory}/box_{index}.jpg"
+            cv2.imwrite(file_name, self.cv_image)
+            self.get_logger().info(f"Image saved: {file_name}")
         else:
-            print("Failed to capture image.")
+            self.get_logger().error("No image data received")
+
+        # 이벤트 초기화
+        self.image_event.clear()
 
     def send_gripper_goal(self, action):
         position = -0.015
@@ -289,28 +324,29 @@ def manipulation_controller(node=None):
         return
 
 
-def main(args=None):
+def main():
     try:
         rclpy.init()
     except Exception as e:
-        print(e)
+        print(f"Failed to initialize rclpy: {e}")
+        return
 
     try:
         node = ManipulationNode()
     except Exception as e:
-        print(e)
+        print(f"Failed to create ManipulationNode: {e}")
+        return
 
     try:
-        while rclpy.ok():
-            # rclpy.spin_once(node)
-            if manipulation_controller(node):
-                break
+        executor = MultiThreadedExecutor()
+        executor.add_node(node)
+        executor.spin()
 
     except Exception as e:
-        print(e)
+        print(f"Exception in execution: {e}")
     finally:
-        # if os.name != 'nt':
-        #     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+        print("Shutting down...")
+        # 종료 처리
         node.destroy_node()
         rclpy.shutdown()
 

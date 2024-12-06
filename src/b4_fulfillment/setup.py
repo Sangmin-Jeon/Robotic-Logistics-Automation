@@ -25,6 +25,7 @@ setup(
             'robot = b4_fulfillment.robot:main',
             'conveyor = b4_fulfillment.conveyor:main',
             'manipulation = b4_fulfillment.manipulation:main',
+            'robot_eyes = b4_fulfillment.robot_eyes:main',
             'debug = b4_fulfillment.debug:main'
         ],
     },
