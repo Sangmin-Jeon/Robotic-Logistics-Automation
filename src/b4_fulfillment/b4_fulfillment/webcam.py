@@ -1,6 +1,9 @@
 import json
 import cv2
 import numpy as np
+import cv2.aruco as aruco
+from scipy.spatial.transform import Rotation as R
+from collections import namedtuple
 from cv_bridge import CvBridge
 from b4_fulfillment_interfaces.srv import Coordinate
 import rclpy
@@ -12,6 +15,7 @@ import threading
 import numpy as np
 
 desired_aruco_dictionary = "DICT_5X5_100"
+Aruco_Coordinate = namedtuple("Aruco_Coordinate", ["id", "x", "y", "z"])
 
 # The different ArUco dictionaries built into the OpenCV library.
 ARUCO_DICT = {
@@ -35,12 +39,11 @@ ARUCO_DICT = {
 }
 
 # 카메라 매트릭스 및 왜곡 계수
-mtx =np.array(
-    [[1.25959611e+03, 0.00000000e+00, 6.31872494e+02],
-     [0.00000000e+00, 1.24295566e+03, 4.40383270e+02],
-     [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]]
-)
-dist = np.array([[-0.05696897,  1.06855636,  0.02816377, -0.01738239,  3.66414905]])
+mtx = np.array([[1.36562832e+03, 0.00000000e+00, 7.06645482e+02],
+                [0.00000000e+00, 1.36250581e+03, 4.12043801e+02],
+                [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]])
+
+dist = np.array([[0.02759679, 0.2556816, -0.00123938, -0.00305147, -0.91805274]])
 
 # ArUco 마커 크기
 aruco_size = 10.8  # cm (10.8cm x 10.8cm)
@@ -48,7 +51,8 @@ aruco_size = 10.8  # cm (10.8cm x 10.8cm)
 # ArUco 마커 ID 정의
 aruco_22_id = 22
 aruco_24_id = 24
-aruco_20_id = 20
+aruco_33_id = 33
+aruco_35_id = 35
 
 class WebcamNode(Node):
     # def __init__(self, pt_file):
@@ -80,9 +84,17 @@ class WebcamNode(Node):
         self.detector = cv2.aruco.ArucoDetector(dictionary, parameters)
 
         # 웹캠 설정
-        self.cap = cv2.VideoCapture(0)  # 기본 웹캠 사용
+        self.cap = cv2.VideoCapture('/dev/video2')  # 기본 웹캠 사용
         if not self.cap.isOpened():
             self.get_logger().error('Could not open video device')
+
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+        # 변경된 해상도 가져오기
+        width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        print(f"해상도: {width}, {height}")
 
         self.bridge = CvBridge()  # OpenCV 이미지를 ROS 이미지로 변환하기 위한 브릿지 설정
 
@@ -104,9 +116,9 @@ class WebcamNode(Node):
         # OpenCV 창 열기
         # cv2.namedWindow('YOLO Detection')
 
-        while not self.coordinate_srv_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('coordinate_service가 열리지 않았습니다...')
-        self.coordinate_transformer()
+        # while not self.coordinate_srv_client.wait_for_service(timeout_sec=1.0):
+        #     self.get_logger().info('coordinate_service가 열리지 않았습니다...')
+        # self.coordinate_transformer()
 
     def process_frame(self):
         # 카메라에서 프레임을 읽음
@@ -115,91 +127,69 @@ class WebcamNode(Node):
             self.get_logger().error('Failed to capture frame')
             return
 
-        # 이미지 크기 출력 (height, width, channels)
-        # height, width, channels = frame.shape
-        # print(f"Frame size: {width}x{height}, Channels: {channels}")
-
+        # 카메라 왜곡 보정
         h, w = frame.shape[:2]
         new_camera_mtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 1, (w, h))
         undistorted_image = cv2.undistort(frame, mtx, dist, None, new_camera_mtx)
 
-        # ArUco 사전 설정 (DICT_5X5_100)
-        aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)
-        aruco_params = cv2.aruco.DetectorParameters()
+        # ArUco 딕셔너리와 탐지 파라미터 설정
+        aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_5X5_100)
+        aruco_params = aruco.DetectorParameters()
 
-        # ArUco 마커 감지
-        corners, ids, _ = cv2.aruco.detectMarkers(undistorted_image, aruco_dict, parameters=aruco_params)
-
-        if ids is not None and len(ids) >= 3:
-            # 모든 마커의 중심 좌표를 계산하여 저장
+        # ArUco 마커 탐지
+        corners, ids, rejected = aruco.detectMarkers(undistorted_image, aruco_dict, parameters=aruco_params)
+        list = []
+        # 마커의 중심점과 rvec, tvec 계산하여 출력
+        if ids is not None:
+            centers = []
+            rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(corners, aruco_size, mtx, dist)
             marker_positions = {}
-            rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(corners, aruco_size, mtx, dist)
-            for i, tvec in zip(ids, tvecs):
-                marker_positions[i[0]] = tvec[0]
-                print(f"ArUco 마커 ID {i[0]}: 3D 위치 {tvec[0]}")
 
-            # 마커 22, 24, 20의 상대적 위치를 기반으로 계산
-            if aruco_22_id in marker_positions and aruco_24_id in marker_positions and aruco_20_id in marker_positions:
-                p22 = marker_positions[aruco_22_id]
-                p24 = marker_positions[aruco_24_id]
-                p20 = marker_positions[aruco_20_id]
+            for corner, marker_id, rvec, tvec in zip(corners, ids.flatten(), rvecs, tvecs):
+                # 각 마커의 코너 좌표를 가져와 중심점 계산
+                corner_points = corner[0]
+                center_x = int(np.mean(corner_points[:, 0]))
+                center_y = int(np.mean(corner_points[:, 1]))
+                centers.append((marker_id, (center_x, center_y), rvec, tvec))
 
-                # 22번과 24번의 중심점을 연결하여 x축을 정의하고 원점을 설정 (x축과 20번 마커가 만나는 지점)
-                x_axis_vec = p24 - p22
-                x_axis_unit_vec = x_axis_vec / np.linalg.norm(x_axis_vec)
+                # 중심점 표시
+                cv2.circle(undistorted_image, (center_x, center_y), 5, (0, 255, 0), -1)
+                # 좌표축 그리기
+                cv2.drawFrameAxes(undistorted_image, mtx, dist, rvec, tvec, 10)
 
-                # 마커 20이 24에 대해 수직이 되도록 보정 (24번을 기준으로 수직 벡터 계산)
-                p24_to_p20_vec = p20 - p24
-                z_axis_vec = np.cross(x_axis_unit_vec, p24_to_p20_vec)
-                z_axis_unit_vec = z_axis_vec / np.linalg.norm(z_axis_vec)
-                y_axis_vec = np.cross(z_axis_unit_vec, x_axis_unit_vec)
-                y_axis_unit_vec = y_axis_vec / np.linalg.norm(y_axis_vec)
+                # rvec 및 tvec 출력
+                # print(f"Marker ID: {marker_id}, rvec: {rvec.flatten()}, tvec: {tvec.flatten()}")
 
-                # 새로운 원점을 p24로 설정하고, 상대 좌표로 변환
-                origin = p24
-                p22_relative = np.dot((p22 - origin), [x_axis_unit_vec, y_axis_unit_vec, z_axis_unit_vec])
-                p24_relative = np.dot((p24 - origin), [x_axis_unit_vec, y_axis_unit_vec, z_axis_unit_vec])
-                p20_relative = np.dot((p20 - origin), [x_axis_unit_vec, y_axis_unit_vec, z_axis_unit_vec])
+                # 마커의 실제 위치 저장
+                marker_positions[marker_id] = (rvec, tvec.flatten())
 
-                # 마커 좌표 출력
-                print(f"마커 22번의 상대 좌표: {p22_relative}")
-                print(f"마커 24번의 상대 좌표: {p24_relative}")
-                print(f"마커 20번의 상대 좌표: {p20_relative}")
+            # 22번 마커를 중심으로 다른 마커들의 실제 위치 계산
+            if aruco_22_id in marker_positions:
+                rvec_22, tvec_22 = marker_positions[aruco_22_id]
+                rotation_22 = R.from_rotvec(rvec_22.flatten())
+                rotation_matrix_22 = rotation_22.as_matrix()
 
-                # 마커 24와 20이 수직임을 고려한 거리 계산
-                d22_24 = np.linalg.norm(p24_relative - p22_relative)
-                d24_20 = np.linalg.norm(p20_relative - p24_relative)
-                d20_22 = np.linalg.norm(p20_relative - p22_relative)
+                for marker_id, (rvec, tvec) in marker_positions.items():
+                    # [ 59.2500774  -23.54381776  65.07852511]
+                    if marker_id != aruco_22_id:
+                        # 상대 위치 계산
+                        relative_position = tvec - tvec_22
+                        # 회전 행렬을 이용하여 실제 좌표 계산
+                        actual_position = np.dot(rotation_matrix_22.T, relative_position)
+                        A_Coord = Aruco_Coordinate(id=marker_id, x=actual_position[0], y=actual_position[1],
+                                          z=actual_position[2])
+                        print(A_Coord)
+                        list.append(A_Coord)
 
-                print(f"22번과 24번 사이의 거리: {d22_24:.2f} cm")
-                print(f"24번과 20번 사이의 거리 (수직): {d24_20:.2f} cm")
-                print(f"20번과 22번 사이의 거리: {d20_22:.2f} cm")
-
-                # 원점과 마커를 시각적으로 표시
-                origin_2d = tuple(origin[:2].astype(int))
-                p22_2d = tuple(p22[:2].astype(int))
-                p24_2d = tuple(p24[:2].astype(int))
-                p20_2d = tuple(p20[:2].astype(int))
-
-                # 원점 표시
-                cv2.circle(undistorted_image, origin_2d, 5, (0, 0, 255), -1)  # 빨간색 점으로 원점 표시
-
-                # 각 마커 연결 선 그리기
-                cv2.line(undistorted_image, p22_2d, p24_2d, (255, 0, 0), 2)  # 파란색 선으로 22번과 24번 연결
-                cv2.line(undistorted_image, p24_2d, p20_2d, (0, 255, 0), 2)  # 초록색 선으로 24번과 20번 연결
-                cv2.line(undistorted_image, p20_2d, p22_2d, (255, 255, 0), 2)  # 노란색 선으로 20번과 22번 연결
-
-            else:
-                print("필요한 모든 마커가 감지되지 않았습니다.")
         else:
             print("ArUco 마커가 충분히 감지되지 않았습니다.")
 
 
-                # (주석 처리된 부분) YOLO 모델로 예측 수행
-                # results = self.model(frame, stream=True)
+        # (주석 처리된 부분) YOLO 모델로 예측 수행
+        # results = self.model(frame, stream=True)
 
-                # (주석 처리된 부분) 결과 프레임에 예측 정보를 표시 (예: 객체 탐지 결과)
-                # frame = results.render()[0]  # 첫 번째 (단일 프레임) 결과를 가져오기
+        # (주석 처리된 부분) 결과 프레임에 예측 정보를 표시 (예: 객체 탐지 결과)
+        # frame = results.render()[0]  # 첫 번째 (단일 프레임) 결과를 가져오기
 
         # 이미지를 ROS 메시지로 변환하여 퍼블리시
         img_msg = self.bridge.cv2_to_imgmsg(undistorted_image, encoding='bgr8')
