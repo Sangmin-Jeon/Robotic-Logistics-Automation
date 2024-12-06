@@ -89,8 +89,6 @@ class ManipulationNode(Node):
             'data_collect_service',
             self.handle_data_collect_service_request
         )
-        # 자동 학습 기능
-        self.auto_data_collection()
 
     def handle_data_collect_service_request(self, request, response):
         """
@@ -103,6 +101,7 @@ class ManipulationNode(Node):
         """
         self.get_logger().info(f"자동 데이터 수집 시작: {request.start}")
 
+        # 자동 학습 기능
         if self.auto_data_collection():
             response.success = True
         else:
