@@ -88,6 +88,7 @@ class WebcamNode(Node):
         if not self.cap.isOpened():
             self.get_logger().error('Could not open video device')
 
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
