@@ -124,6 +124,7 @@ class ManipulationNode(Node):
 
         # 메니풀레이션의 상태 좌표 저장
         self.manipulation_pose = None
+        self.is_center_pose = False
 
         self.move_finished_first_pose = self.start_job1()
 
@@ -132,7 +133,7 @@ class ManipulationNode(Node):
         try:
             self.cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
             self.image_event.set()  # 이미지 수신 이벤트 발생
-            self.get_logger().info('Image received')
+            # self.get_logger().info('Image received')
 
         except Exception as e:
             self.get_logger().error(f"Failed to process image: {e}")
@@ -141,10 +142,9 @@ class ManipulationNode(Node):
     def box_data_callback(self, msg):
         # geometry_msgs.msg.Point(x=244.0, y=385.0, z=0.0)
 
-        camera_x = 320  # 카메라 중앙 x
-        camera_y = 240  # 카메라 중앙 y
-
-        if self.move_finished_first_pose:
+        if self.move_finished_first_pose and not self.is_center_pose:
+            camera_x = 320  # 카메라 중앙 x
+            camera_y = 240  # 카메라 중앙 y
             # 중심점 맞추는 계산 시작
             dx, dy, dz = self.calculate_camera_movement(camera_x, camera_y, msg)
             self.set_center_pose(dx, dy, dz)
@@ -158,6 +158,8 @@ class ManipulationNode(Node):
             self.manipulation_pose.z,
             r1, r2, r3
         )
+
+        self.send_gripper_goal('open')
 
         time.sleep(3)
 
@@ -175,14 +177,20 @@ class ManipulationNode(Node):
         center_y = msg.y
         center_z = 130  # z 값도 필요한 경우
 
-        ratio = 0.03
+        ratio = 0.003
 
-        print(f"카메라 중앙: ({camera_x}, {camera_y}) , 박스 중앙: ({center_x}, {center_y})")
+        self.get_logger().info(f"카메라 중앙: ({camera_x}, {camera_y}) , 박스 중앙: ({center_x}, {center_y})")
 
         # 카메라의 중심과 객체 중심 간의 차이만 계산
         dx = (camera_x - center_x) * ratio  # x축 이동량
         dy = (center_y - camera_y) * ratio  # y축 이동량
         dz = center_z  # z 값 고정
+
+        # 객체의 중심점이 hit 박스 안에 들어오면
+        if self.cal_center_in_hit_box(camera_x, camera_y, center_x, center_y) and not self.is_center_pose:
+            self.is_center_pose = True
+            self.get_box()
+            return self.manipulation_pose.x, self.manipulation_pose.y, self.manipulation_pose.z
 
         # 새로운 목표 위치를 갱신
         self.manipulation_pose = Coordinate(
@@ -191,16 +199,51 @@ class ManipulationNode(Node):
             dz
         )
 
-        print(f"dx: {dx}, dy: {dy}, dz: {dz} 만큼 계산됨 ")
+        self.get_logger().info(f"dx: {dx}, dy: {dy}, dz: {dz} 만큼 계산됨 ")
 
         time.sleep(3)
 
         return self.manipulation_pose.x, self.manipulation_pose.y, self.manipulation_pose.z
 
     def set_center_pose(self, x, y, z):
-        print(f"x: {x}, y: {y}, z: {z} 만큼 움직여 중앙 정렬 중...")
-        self.send_joint_pose_goal(x, y, z, r1, r2, r3)
-        time.sleep(2)
+        if not self.is_center_pose:
+            self.get_logger().info(f"x: {x}, y: {y}, z: {z} 만큼 움직여 중앙 정렬 중...")
+            self.send_joint_pose_goal(x, y, z, r1, r2, r3)
+            time.sleep(2)
+
+
+    def cal_center_in_hit_box(self, camera_x, camera_y, center_x, center_y):
+        # 박스 크기 및 중심 좌표 정의
+        x_min = 245
+        x_max = 395
+        y_min = 85
+        y_max = 260
+        # 박스 중앙: (333.0, 255.0)
+        self.get_logger().info(f"Hit 박스 안에 들어옴: {x_min <= center_x <= x_max and y_min <= center_y <= y_max}")
+        return x_min <= center_x <= x_max and y_min <= center_y <= y_max
+
+    def get_box(self):
+        if self.is_center_pose:
+            self.get_logger().info(f"박스 잡으러 내려가는 중")
+            time.sleep(2.5)
+            self.send_joint_pose_goal(self.manipulation_pose.x + 40, self.manipulation_pose.y + 20, 130, r1, r2, r3)
+
+            time.sleep(2.5)
+
+            self.send_joint_pose_goal(self.manipulation_pose.x + 60, self.manipulation_pose.y + 15, 50, r1, r2, r3)
+
+            time.sleep(3)
+
+            self.get_logger().info(f"박스 잡았다.")
+
+            _ = self.send_gripper_goal('close')
+
+            time.sleep(2.5)
+
+            self.send_joint_pose_goal(self.manipulation_pose.x, self.manipulation_pose.y, 130, r1, r2, r3)
+
+
+
 
     def handle_data_collect_service_request(self, request, response):
         """
@@ -284,7 +327,6 @@ class ManipulationNode(Node):
         if not self.gripper_action_client.wait_for_server(timeout_sec=1.0):
             self.get_logger().error("Gripper action server not available!")
             return None
-        print("보냄")
         return self.gripper_action_client.send_goal_async(goal)
 
 
@@ -308,6 +350,27 @@ class ManipulationNode(Node):
 
         self.trajectory_msg.points = [point]
         self.joint_pub.publish(self.trajectory_msg)
+
+    # def send_joint_pose_convayer_goal(self, x, y, z, r1, r2, r3):
+    #     print(f"x: {x}, y: {y}, z: {z} 로 이동")
+    #     J0, J1, J2, J3, Sxy, sr1, sr2, sr3, St, Rt = self.solv_robot_arm2(x, y, z, r1, r2, r3)
+    #
+    #     # 시계방향 90도 회전 (Sxy 값에 pi/2 추가)
+    #     Sxy += math.pi / 2
+    #
+    #     current_time = self.get_clock().now()
+    #     self.trajectory_msg.header = Header()
+    #     self.trajectory_msg.header.frame_id = ''
+    #     self.trajectory_msg.joint_names = ['joint1', 'joint2', 'joint3', 'joint4']
+    #
+    #     point = JointTrajectoryPoint()
+    #     point.positions = [Sxy, sr1 + th1_offset, sr2 + th2_offset, sr3]
+    #     point.velocities = [0.0] * 4
+    #     point.time_from_start.sec = 3
+    #     point.time_from_start.nanosec = 0
+    #
+    #     self.trajectory_msg.points = [point]
+    #     self.joint_pub.publish(self.trajectory_msg)
 
 
     # author : karl.kwon (mrthinks@gmail.com)
@@ -357,52 +420,6 @@ class ManipulationNode(Node):
               J2[2] + r3 * math.cos(sr1 + sr2 + sr3))
 
         return J0, J1, J2, J3, Sxy, sr1, sr2, sr3, St, Rt
-
-
-def manipulation_controller(node=None):
-    if node is None:
-        print("node가 없습니다.")
-        return
-    key_value = getkey.getkey()
-
-    if key_value == '1':
-        node.trajectory_msg.points[0].positions = [0.0] * 4
-        node.joint_pub.publish(node.trajectory_msg)
-        print('joint1 +')
-    elif key_value == 'y':
-        node.trajectory_msg.points[0].positions[0] += joint_angle_delta
-        node.joint_pub.publish(node.trajectory_msg)
-        print('joint1 +')
-    elif key_value == 'h':
-        node.trajectory_msg.points[0].positions[0] -= joint_angle_delta
-        node.joint_pub.publish(node.trajectory_msg)
-        print('joint1 -')
-    elif key_value == 'u':
-        node.trajectory_msg.points[0].positions[1] += joint_angle_delta
-        node.joint_pub.publish(node.trajectory_msg)
-        print('joint2 +')
-    elif key_value == 'j':
-        node.trajectory_msg.points[0].positions[1] -= joint_angle_delta
-        node.joint_pub.publish(node.trajectory_msg)
-        print('joint2 -')
-    elif key_value == 'i':
-        node.trajectory_msg.points[0].positions[2] += joint_angle_delta
-        node.joint_pub.publish(node.trajectory_msg)
-        print('joint3 +')
-    elif key_value == 'k':
-        node.trajectory_msg.points[0].positions[2] -= joint_angle_delta
-        node.joint_pub.publish(node.trajectory_msg)
-        print('joint3 -')
-    elif key_value == 'o':
-        node.trajectory_msg.points[0].positions[3] += joint_angle_delta
-        node.joint_pub.publish(node.trajectory_msg)
-        print('joint4 +')
-    elif key_value == 'l':
-        node.trajectory_msg.points[0].positions[3] -= joint_angle_delta
-        node.joint_pub.publish(node.trajectory_msg)
-        print('joint4 -')
-    elif key_value == 'q':
-        return
 
 
 def main():

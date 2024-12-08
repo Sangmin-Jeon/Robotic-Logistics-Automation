@@ -21,12 +21,15 @@ set(msg_files
   "msg/RobotStatus.msg"
   "msg/ConvGoButton.msg"
   "msg/ConvStopButton.msg"
+  "msg/RobotCoord.msg"
 )
 
 set(srv_files
   "srv/Coord.srv"
   "srv/Coordinate.srv"
   "srv/DataCollect.srv"
+  "srv/MoveCoord.srv"
+  "srv/StopMove.srv"
 )
 
 set(action_files
