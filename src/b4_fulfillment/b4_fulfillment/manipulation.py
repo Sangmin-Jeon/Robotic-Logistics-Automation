@@ -104,23 +104,28 @@ class ManipulationNode(Node):
             callback_group=self.callback_group
         )
 
-        # 이미지 토픽 서브스크라이버 생성
+        # 이미지 토픽 서브스크라이버
         _ = self.create_subscription(
             Image,  # 메시지 타입
-            'gripper_images',  # 토픽 이름 (퍼블리셔와 일치)
-            self.image_callback,  # 콜백 함수
-            10  # QoS 프로파일
+            'gripper_images',
+            self.image_callback,
+            10,
+            callback_group = self.callback_group
         )
 
-        # 이미지 토픽 서브스크라이버 생성
+        # 박스 중심점 토픽 서브스크라이버
         _ = self.create_subscription(
             Point,  # 메시지 타입
-            'center_point',  # 토픽 이름 (퍼블리셔와 일치)
-            self.box_data_callback,  # 콜백 함수
-            10  # QoS 프로파일
+            'center_point',
+            self.box_data_callback,
+            10,
+            callback_group=self.callback_group
         )
 
-        self.start_job1()
+        # 메니풀레이션의 상태 좌표 저장
+        self.manipulation_pose = None
+
+        self.move_finished_first_pose = self.start_job1()
 
     def image_callback(self, msg):
         # 메시지를 OpenCV 이미지로 변환
@@ -139,15 +144,24 @@ class ManipulationNode(Node):
         camera_x = 320  # 카메라 중앙 x
         camera_y = 240  # 카메라 중앙 y
 
-        # 중심점 계산
-        dx, dy, dz = self.calculate_camera_movement(camera_x, camera_y, msg)
-        # TODO: 계산 된 값 매니풀레이터에 맞게 조정 필요
-
-        self.set_center_pose(dx, dy, dz)
+        if self.move_finished_first_pose:
+            # 중심점 맞추는 계산 시작
+            dx, dy, dz = self.calculate_camera_movement(camera_x, camera_y, msg)
+            self.set_center_pose(dx, dy, dz)
 
     def start_job1(self):
-        box = Coordinate(x=150, y=45, z=130)
-        self.send_joint_pose_goal(box.x, box.y, box.z, r1, r2, r3)
+        self.manipulation_pose = Coordinate(x=150, y=45, z=130)
+
+        self.send_joint_pose_goal(
+            self.manipulation_pose.x,
+            self.manipulation_pose.y,
+            self.manipulation_pose.z,
+            r1, r2, r3
+        )
+
+        time.sleep(3)
+
+        return True
 
     def start_job2(self):
         pass
@@ -159,16 +173,29 @@ class ManipulationNode(Node):
         # msg로 받은 중심점 좌표
         center_x = msg.x
         center_y = msg.y
-        center_z = msg.z  # z 값도 필요한 경우
+        center_z = 130  # z 값도 필요한 경우
 
-        # 카메라의 중심 (camera_x, camera_y)와 주어진 중심점 (center_x, center_y) 간의 차이 계산
-        dx = center_x - camera_x  # x축 이동량
-        dy = center_y - camera_y  # y축 이동량
+        ratio = 0.03
 
-        # z 값은 필요에 따라 추가적으로 설정할 수 있습니다
-        dz = center_z  # 카메라의 깊이 정보가 필요하다면, 적절한 값으로 설정
+        print(f"카메라 중앙: ({camera_x}, {camera_y}) , 박스 중앙: ({center_x}, {center_y})")
 
-        return dx, dy, dz
+        # 카메라의 중심과 객체 중심 간의 차이만 계산
+        dx = (camera_x - center_x) * ratio  # x축 이동량
+        dy = (center_y - camera_y) * ratio  # y축 이동량
+        dz = center_z  # z 값 고정
+
+        # 새로운 목표 위치를 갱신
+        self.manipulation_pose = Coordinate(
+            self.manipulation_pose.x + dx,
+            self.manipulation_pose.y + dy,
+            dz
+        )
+
+        print(f"dx: {dx}, dy: {dy}, dz: {dz} 만큼 계산됨 ")
+
+        time.sleep(3)
+
+        return self.manipulation_pose.x, self.manipulation_pose.y, self.manipulation_pose.z
 
     def set_center_pose(self, x, y, z):
         print(f"x: {x}, y: {y}, z: {z} 만큼 움직여 중앙 정렬 중...")
@@ -195,6 +222,7 @@ class ManipulationNode(Node):
         return response
 
 
+    # 자동 데이터 수집 기능
     def auto_data_collection(self):
         coordinates = [
             Coordinate(x=150, y=45, z=130),
