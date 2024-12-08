@@ -6,6 +6,7 @@ from scipy.spatial.transform import Rotation as R
 from collections import namedtuple
 from cv_bridge import CvBridge
 from b4_fulfillment_interfaces.srv import Coordinate
+from b4_fulfillment_interfaces.msg import RobotCoord
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
@@ -13,6 +14,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 import threading
 import numpy as np
+import sys
 
 desired_aruco_dictionary = "DICT_5X5_100"
 Aruco_Coordinate = namedtuple("Aruco_Coordinate", ["id", "x", "y", "z"])
@@ -52,13 +54,15 @@ aruco_size = 10.8  # cm (10.8cm x 10.8cm)
 aruco_22_id = 22
 aruco_24_id = 24
 aruco_33_id = 33
-aruco_35_id = 35
+aruco_34_id = 34
+
 
 class WebcamNode(Node):
     # def __init__(self, pt_file):
     def __init__(self):
         # 노드 초기화
         super().__init__('WebcamNode')
+        self.service_called = False  # service_called 초기화
         # self.pt_file = pt_file
         self.callback_group = ReentrantCallbackGroup()
 
@@ -67,7 +71,7 @@ class WebcamNode(Node):
         # self.get_logger().info(f'Loaded model from {self.pt_file}')
         # Check that we have a valid ArUco marker
         if ARUCO_DICT.get(desired_aruco_dictionary, None) is None:
-            print("[INFO] ArUCo tag of '{}' is not supported".format(args["type"]))
+            print("[INFO] ArUCo tag of '{}' is not supported".format(sys.args["type"]))
             sys.exit(0)
 
         # Load the ArUco dictionary
@@ -84,7 +88,7 @@ class WebcamNode(Node):
         self.detector = cv2.aruco.ArucoDetector(dictionary, parameters)
 
         # 웹캠 설정
-        self.cap = cv2.VideoCapture('/dev/video2')  # 기본 웹캠 사용
+        self.cap = cv2.VideoCapture(18)  # 기본 웹캠 사용
         if not self.cap.isOpened():
             self.get_logger().error('Could not open video device')
 
@@ -104,7 +108,14 @@ class WebcamNode(Node):
             Image,  # 메시지 타입
             'world_video',  # 토픽 이름
             qos_profile=10,  # QoS 프로파일
-            callback_group = self.callback_group
+            callback_group=self.callback_group
+        )
+
+        self.robot_xyz = self.create_publisher(
+            RobotCoord,  # 메시지 타입
+            'robot_coord',  # 토픽 이름
+            qos_profile=10,  # QoS 프로파일
+            callback_group=self.callback_group
         )
 
         # 좌표 보내는 서비스 클라이언트
@@ -165,26 +176,60 @@ class WebcamNode(Node):
                 marker_positions[marker_id] = (rvec, tvec.flatten())
 
             # 22번 마커를 중심으로 다른 마커들의 실제 위치 계산
-            if aruco_22_id in marker_positions:
-                rvec_22, tvec_22 = marker_positions[aruco_22_id]
-                rotation_22 = R.from_rotvec(rvec_22.flatten())
-                rotation_matrix_22 = rotation_22.as_matrix()
+        if aruco_33_id in marker_positions:
+            rvec_33, tvec_33 = marker_positions[aruco_33_id]
+            rotation_33 = R.from_rotvec(rvec_33.flatten())
+            rotation_matrix_33 = rotation_33.as_matrix()
 
-                for marker_id, (rvec, tvec) in marker_positions.items():
-                    # [ 59.2500774  -23.54381776  65.07852511]
-                    if marker_id != aruco_22_id:
-                        # 상대 위치 계산
-                        relative_position = tvec - tvec_22
-                        # 회전 행렬을 이용하여 실제 좌표 계산
-                        actual_position = np.dot(rotation_matrix_22.T, relative_position)
-                        A_Coord = Aruco_Coordinate(id=marker_id, x=actual_position[0], y=actual_position[1],
-                                          z=actual_position[2])
-                        print(A_Coord)
-                        list.append(A_Coord)
+            # 중복 방지를 위한 집합
+            unique_ids = set()
+
+            for marker_id, (rvec, tvec) in marker_positions.items():
+                if marker_id != aruco_33_id and marker_id not in unique_ids:
+                    unique_ids.add(marker_id)  # ID 추가로 중복 방지
+
+                    relative_position = tvec - tvec_33
+                    actual_position = np.dot(rotation_matrix_33.T, relative_position)
+
+                    A_Coord = Aruco_Coordinate(
+                        id=marker_id,
+                        x=actual_position[0],
+                        y=actual_position[1],
+                        z=actual_position[2]
+                    )
+
+                    # 34번 마커는 계속 퍼블리싱
+                    if marker_id == 34:
+                        msg = RobotCoord()
+                        msg.robot_coord = str(A_Coord)
+                        self.robot_xyz.publish(msg)
+
+                    # 리스트에 추가
+                    list.append(A_Coord)
+
+            # 리스트를 서비스 요청으로 전송 (한 번만 실행)
+            if list and not self.service_called:
+                list_data = [
+                    {
+                        "id": int(coord.id),  # numpy.int32를 Python int로 변환
+                        "x": float(coord.x),  # numpy.float64를 Python float로 변환
+                        "y": float(coord.y),
+                        "z": float(coord.z)
+                    }
+                    for coord in list
+                ]
+
+                request = Coordinate.Request()
+                request.json_data = json.dumps(list_data)  # JSON 직렬화
+                print(f"Sending data to service: {list_data}")
+
+                future = self.coordinate_srv_client.call_async(request)
+                future.add_done_callback(self.coordinate_transformer_callback)
+
+                self.service_called = True
 
         else:
             print("ArUco 마커가 충분히 감지되지 않았습니다.")
-
 
         # (주석 처리된 부분) YOLO 모델로 예측 수행
         # results = self.model(frame, stream=True)
@@ -207,17 +252,10 @@ class WebcamNode(Node):
     def cal_robot_init_pose(self):
         pass
 
-
-
     # 좌표 변환
     def coordinate_transformer(self):
         # JSON 데이터 준비
         json_data = {
-            "init_pose": {
-                "x": 0.0,
-                "y": 0.0,
-                "z": 0.0
-            },
             "location1": {
                 "x": 0.0,
                 "y": 0.0,
@@ -260,7 +298,6 @@ class WebcamNode(Node):
 
 # 메인 함수
 def main(args=None):
-    # ROS 2 initialization
     rclpy.init(args=args)
 
     # Create executor and node
@@ -281,9 +318,10 @@ def main(args=None):
         print("Interrupted by user. Shutting down...")
     finally:
         # Shutdown the node and executor
-        executor.destroy_node()
+        node.destroy_node()  # 노드에서 destroy_node 호출
         executor.shutdown()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
