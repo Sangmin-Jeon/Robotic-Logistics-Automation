@@ -245,7 +245,11 @@ class ManipulationNode(Node):
             time.sleep(2.5)
 
             self.get_logger().info(f"컨베이어로 이동 중 ...")
-            self.send_joint_pose_convayer_goal(self.manipulation_pose.x, self.manipulation_pose.y, 130, r1, r2, r3)
+            self.send_joint_pose_convayer_goal(self.manipulation_pose.x, self.manipulation_pose.y, 85, r1, r2, r3)
+
+            time.sleep(4)
+
+            _ = self.send_gripper_goal('open')
 
 
 
@@ -356,12 +360,12 @@ class ManipulationNode(Node):
         self.joint_pub.publish(self.trajectory_msg)
 
     def send_joint_pose_convayer_goal(self, x, y, z, r1, r2, r3):
+        custom_offset = -math.radians(30)
         print(f"x: {x}, y: {y}, z: {z} 로 이동")
         J0, J1, J2, J3, Sxy, sr1, sr2, sr3, St, Rt = self.solv_robot_arm2(x, y, z, r1, r2, r3)
 
         # 시계방향 90도 회전 (Sxy 값에 pi/2 추가)
-        Sxy += math.pi / 2
-        sr3 = 100.0
+        Sxy -= math.pi / 2
 
         current_time = self.get_clock().now()
         self.trajectory_msg.header = Header()
@@ -369,7 +373,7 @@ class ManipulationNode(Node):
         self.trajectory_msg.joint_names = ['joint1', 'joint2', 'joint3', 'joint4']
 
         point = JointTrajectoryPoint()
-        point.positions = [Sxy, sr1 + th1_offset, sr2 + th2_offset, sr3]
+        point.positions = [Sxy, sr1 + th1_offset -math.radians(15), sr2 + th2_offset, sr3 + custom_offset]
         point.velocities = [0.0] * 4
         point.time_from_start.sec = 3
         point.time_from_start.nanosec = 0
