@@ -145,6 +145,8 @@ class ManipulationNode(Node):
         self.move_finished_first_pose = False
         # self.move_finished_first_pose = self.start_job1()
 
+        self.capture_image = None
+
     def do_grip_callback(self, request, response):
         self.get_logger().info(f"manipulation going up: {request.grip}")
 
@@ -163,6 +165,12 @@ class ManipulationNode(Node):
         try:
             self.cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
             self.image_event.set()  # 이미지 수신 이벤트 발생
+            if self.is_center_pose and self.capture_image is None:
+                self.capture_image = self.cv_image
+                file_path = "/home/rokey10/capture_image.jpg"  # 저장할 파일 경로와 이름
+                cv2.imwrite(file_path, self.capture_image)
+                self.get_logger().info(f"이미지가 {file_path}에 저장되었습니다.")
+
             # self.get_logger().info('Image received')
 
         except Exception as e:
