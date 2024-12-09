@@ -19,6 +19,8 @@ from b4_fulfillment_interfaces.srv import DataCollect
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from sensor_msgs.msg import Image
+from b4_fulfillment_interfaces.srv import DoGrip
+from b4_fulfillment_interfaces.srv import ConvStart
 
 import math
 import time
@@ -122,11 +124,39 @@ class ManipulationNode(Node):
             callback_group=self.callback_group
         )
 
+        # 시작 트리거 서비스
+        _ = self.create_service(
+            DoGrip,
+            'do_grip_service',
+            self.do_grip_callback,
+            callback_group=self.callback_group
+        )
+
+        self.move_conv_client = self.create_client(
+            ConvStart,
+            'move_conv_service',
+            callback_group=self.callback_group
+        )
+
+
         # 메니풀레이션의 상태 좌표 저장
         self.manipulation_pose = None
         self.is_center_pose = False
+        self.move_finished_first_pose = False
+        # self.move_finished_first_pose = self.start_job1()
 
-        self.move_finished_first_pose = self.start_job1()
+    def do_grip_callback(self, request, response):
+        self.get_logger().info(f"manipulation going up: {request.grip}")
+
+        if request.grip:
+            self.move_finished_first_pose = self.start_job1()
+            response.success = True
+        else:
+            response.success = False
+
+        return response
+
+
 
     def image_callback(self, msg):
         # 메시지를 OpenCV 이미지로 변환
@@ -161,7 +191,7 @@ class ManipulationNode(Node):
 
         self.send_gripper_goal('open')
 
-        time.sleep(3)
+        time.sleep(2.5)
 
         return True
 
@@ -226,11 +256,21 @@ class ManipulationNode(Node):
         if self.is_center_pose:
             self.get_logger().info(f"박스 잡으러 내려가는 중")
             time.sleep(2.5)
-            self.send_joint_pose_goal(self.manipulation_pose.x + 40, self.manipulation_pose.y + 20, 130, r1, r2, r3)
+            self.send_joint_pose_goal(
+                self.manipulation_pose.x + 40,
+                self.manipulation_pose.y + 20,
+                130,
+                r1, r2, r3
+            )
 
             time.sleep(2.5)
 
-            self.send_joint_pose_goal(self.manipulation_pose.x + 60, self.manipulation_pose.y + 15, 50, r1, r2, r3)
+            self.send_joint_pose_goal(
+                self.manipulation_pose.x + 60,
+                self.manipulation_pose.y + 15,
+                50,
+                r1, r2, r3
+            )
 
             time.sleep(3)
 
@@ -240,17 +280,60 @@ class ManipulationNode(Node):
 
             time.sleep(2.5)
 
-            self.send_joint_pose_goal(self.manipulation_pose.x, self.manipulation_pose.y, 130, r1, r2, r3)
+            self.send_joint_pose_goal(
+                self.manipulation_pose.x,
+                self.manipulation_pose.y,
+                130,
+                r1, r2, r3
+            )
 
             time.sleep(2.5)
 
             self.get_logger().info(f"컨베이어로 이동 중 ...")
-            self.send_joint_pose_convayer_goal(self.manipulation_pose.x, self.manipulation_pose.y, 85, r1, r2, r3)
+
+            self.send_joint_pose_convayer_goal(
+                self.manipulation_pose.x + 15,
+                self.manipulation_pose.y,
+                150,
+                r1, r2, r3
+            )
 
             time.sleep(4)
 
             _ = self.send_gripper_goal('open')
 
+            time.sleep(3)
+
+            self.send_joint_pose_convayer_goal(
+                    self.manipulation_pose.x,
+                    self.manipulation_pose.y,
+                    160,
+                    r1, r2, r3
+                    )
+
+            time.sleep(3)
+
+            self.send_joint_pose_init_goal(self.manipulation_pose.x, self.manipulation_pose.y, 160, r1, r2, r3)
+
+            time.sleep(3)
+
+            self.finished_put_box_in_conveyer()
+
+
+    def finished_put_box_in_conveyer(self):
+        while not self.move_conv_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('서비스 대기 중...')
+
+        request = ConvStart.Request()
+        request.convstart = True
+        future = self.move_conv_client.call_async(request)
+        future.add_done_callback(self.move_conv_callback)
+
+    def move_conv_callback(self, future):
+        try:
+            self.get_logger().info(f"컨베이어 작동 중: {future}")
+        except Exception as e:
+            self.get_logger().error(f"서비스 호출 실패: {e}")
 
 
     def handle_data_collect_service_request(self, request, response):
@@ -351,7 +434,12 @@ class ManipulationNode(Node):
         point = JointTrajectoryPoint()
         # point.positions = [0.003, math.pi / 4.0, -0.489, 2.041]
         #		point.positions = [0.0] * 4
-        point.positions = [Sxy, sr1 + th1_offset, sr2 + th2_offset, sr3]
+        point.positions = [
+            Sxy,
+            sr1 + th1_offset,
+            sr2 + th2_offset,
+            sr3
+        ]
         point.velocities = [0.0] * 4
         point.time_from_start.sec = 3
         point.time_from_start.nanosec = 0
@@ -360,12 +448,12 @@ class ManipulationNode(Node):
         self.joint_pub.publish(self.trajectory_msg)
 
     def send_joint_pose_convayer_goal(self, x, y, z, r1, r2, r3):
-        custom_offset = -math.radians(30)
+        custom_offset = -math.radians(40)
         print(f"x: {x}, y: {y}, z: {z} 로 이동")
         J0, J1, J2, J3, Sxy, sr1, sr2, sr3, St, Rt = self.solv_robot_arm2(x, y, z, r1, r2, r3)
 
         # 시계방향 90도 회전 (Sxy 값에 pi/2 추가)
-        Sxy -= math.pi / 2
+        Sxy -= (math.pi * (10 / 9) / 2)
 
         current_time = self.get_clock().now()
         self.trajectory_msg.header = Header()
@@ -373,7 +461,12 @@ class ManipulationNode(Node):
         self.trajectory_msg.joint_names = ['joint1', 'joint2', 'joint3', 'joint4']
 
         point = JointTrajectoryPoint()
-        point.positions = [Sxy, sr1 + th1_offset -math.radians(15), sr2 + th2_offset, sr3 + custom_offset]
+        point.positions = [
+            Sxy,
+            sr1 + th1_offset + math.radians(20),
+            sr2 + th2_offset,
+            sr3 + custom_offset
+        ]
         point.velocities = [0.0] * 4
         point.time_from_start.sec = 3
         point.time_from_start.nanosec = 0
@@ -381,6 +474,31 @@ class ManipulationNode(Node):
         self.trajectory_msg.points = [point]
         self.joint_pub.publish(self.trajectory_msg)
 
+
+
+    def send_joint_pose_init_goal(self, x, y, z, r1, r2, r3):
+        custom_offset = -math.radians(10)
+        print(f"x: {x}, y: {y}, z: {z} 로 이동")
+        J0, J1, J2, J3, Sxy, sr1, sr2, sr3, St, Rt = self.solv_robot_arm2(x, y, z, r1, r2, r3)
+
+        current_time = self.get_clock().now()
+        self.trajectory_msg.header = Header()
+        self.trajectory_msg.header.frame_id = ''
+        self.trajectory_msg.joint_names = ['joint1', 'joint2', 'joint3', 'joint4']
+
+        point = JointTrajectoryPoint()
+        point.positions = [
+            Sxy,
+            sr1 + th1_offset,
+            sr2 + th2_offset,
+            sr3 + custom_offset
+        ]
+        point.velocities = [0.0] * 4
+        point.time_from_start.sec = 3
+        point.time_from_start.nanosec = 0
+
+        self.trajectory_msg.points = [point]
+        self.joint_pub.publish(self.trajectory_msg)
 
     # author : karl.kwon (mrthinks@gmail.com)
     # r1 : distance J0 to J1
@@ -460,3 +578,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

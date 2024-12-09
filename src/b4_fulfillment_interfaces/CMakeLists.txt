@@ -30,6 +30,8 @@ set(srv_files
   "srv/DataCollect.srv"
   "srv/MoveCoord.srv"
   "srv/StopMove.srv"
+  "srv/DoGrip.srv"
+  "srv/ConvStart.srv"
 )
 
 set(action_files
